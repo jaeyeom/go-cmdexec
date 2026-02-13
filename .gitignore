@@ -1,0 +1,5 @@
+# Coverage artifacts
+.coverage/
+
+# oh-my-claudecode state
+.omc/
