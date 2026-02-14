@@ -54,7 +54,7 @@ func (e *BasicExecutor) Execute(ctx context.Context, cfg ToolConfig) (*Execution
 			if err != nil {
 				return nil, err
 			}
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("context done: %w", ctx.Err())
 		}
 
 		// Store last attempt for final error reporting
@@ -69,7 +69,7 @@ func (e *BasicExecutor) Execute(ctx context.Context, cfg ToolConfig) (*Execution
 					// Continue to next attempt
 				case <-ctx.Done():
 					// Context cancelled during retry delay
-					return nil, ctx.Err()
+					return nil, fmt.Errorf("context done during retry delay: %w", ctx.Err())
 				}
 			}
 		}
