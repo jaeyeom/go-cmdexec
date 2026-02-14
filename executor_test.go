@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -576,7 +577,7 @@ func TestBasicExecutor_Execute_RetryExhausted(t *testing.T) {
 
 	cfg := ToolConfig{
 		Command:    "sh",
-		Args:       []string{"-c", "exit 1"},
+		Args:       []string{"-c", "echo fail-output >&2; exit 1"},
 		MaxRetries: 2, // 3 total attempts, all fail
 		RetryDelay: 10 * time.Millisecond,
 	}
@@ -601,6 +602,17 @@ func TestBasicExecutor_Execute_RetryExhausted(t *testing.T) {
 	}
 	if retryErr.LastError == nil {
 		t.Error("LastError is nil, want non-nil")
+	}
+
+	// Finding 3: LastResult preserves structured diagnostics
+	if retryErr.LastResult == nil {
+		t.Fatal("LastResult is nil, want non-nil")
+	}
+	if retryErr.LastResult.ExitCode != 1 {
+		t.Errorf("LastResult.ExitCode = %d, want 1", retryErr.LastResult.ExitCode)
+	}
+	if !strings.Contains(retryErr.LastResult.Stderr, "fail-output") {
+		t.Errorf("LastResult.Stderr = %q, want to contain 'fail-output'", retryErr.LastResult.Stderr)
 	}
 }
 
@@ -1173,6 +1185,106 @@ func TestBasicExecutor_Execute_MaxStderrBytes(t *testing.T) {
 	// Stdout should be unaffected
 	if result.StdoutTruncated {
 		t.Error("StdoutTruncated should be false")
+	}
+}
+
+func TestBasicExecutor_Execute_StdinWithRetries_Rejected(t *testing.T) {
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	// Stdin + MaxRetries without StdinFactory should be rejected
+	cfg := ToolConfig{
+		Command:    "cat",
+		Stdin:      strings.NewReader("data"),
+		MaxRetries: 2,
+	}
+
+	_, err := executor.Execute(ctx, cfg)
+	if err == nil {
+		t.Fatal("Expected validation error for Stdin + MaxRetries without StdinFactory")
+	}
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("Expected ValidationError, got %T: %v", err, err)
+	}
+	if validationErr.Field != "Stdin" {
+		t.Errorf("Field = %q, want %q", validationErr.Field, "Stdin")
+	}
+}
+
+func TestBasicExecutor_Execute_StdinFactory_RetrySuccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping stdin retry test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	// Counter file to track attempts
+	counterFile, err := os.CreateTemp("", "stdin-retry-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(counterFile.Name()) }()
+	if _, err := counterFile.WriteString("0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := counterFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Script: increment counter, fail until attempt 2, then cat stdin
+	script := `count=$(cat ` + counterFile.Name() + `); count=$((count+1)); echo $count > ` + counterFile.Name() + `; if [ $count -lt 2 ]; then exit 1; fi; cat`
+
+	cfg := ToolConfig{
+		Command:    "sh",
+		Args:       []string{"-c", script},
+		MaxRetries: 3,
+		RetryDelay: 10 * time.Millisecond,
+		StdinFactory: func() io.Reader {
+			return strings.NewReader("hello from stdin")
+		},
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("Execute() returned nil result")
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+	// The successful attempt (2nd) should have read stdin correctly
+	if !strings.Contains(result.Output, "hello from stdin") {
+		t.Errorf("Output = %q, want to contain 'hello from stdin'", result.Output)
+	}
+}
+
+func TestBasicExecutor_Execute_StdinFactory_TakesPrecedence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping stdin factory test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	// When both Stdin and StdinFactory are set, StdinFactory takes precedence
+	cfg := ToolConfig{
+		Command: "cat",
+		Stdin:   strings.NewReader("should be ignored"),
+		StdinFactory: func() io.Reader {
+			return strings.NewReader("from factory")
+		},
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Output != "from factory" {
+		t.Errorf("Output = %q, want %q", result.Output, "from factory")
 	}
 }
 

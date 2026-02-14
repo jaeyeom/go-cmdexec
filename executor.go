@@ -28,12 +28,18 @@ func NewBasicExecutor() *BasicExecutor {
 //     cancellation, I/O failures) return (nil, error) with typed errors.
 //   - Process exit outcomes return (*ExecutionResult, nil). The caller
 //     inspects ExitCode to determine success or failure.
+//   - Retry exhaustion: when MaxRetries > 0 and all attempts fail,
+//     Execute returns (nil, *RetryExhaustedError). This overrides the
+//     normal contract because persistent failure across retries is treated
+//     as a system-level error. Use RetryExhaustedError.LastResult to
+//     access the structured result from the final attempt.
 //
 // Typed errors returned:
 //   - *ValidationError: invalid ToolConfig fields.
 //   - *TimeoutError: command exceeded configured Timeout.
 //   - *ExecutableNotFoundError: command not found in PATH.
 //   - *RetryExhaustedError: all retry attempts failed (wraps last error).
+//   - *CommandNotAllowedError: command rejected by CommandValidator.
 //   - context.Canceled / context.DeadlineExceeded: context was cancelled.
 func (e *BasicExecutor) Execute(ctx context.Context, cfg ToolConfig) (*ExecutionResult, error) {
 	if err := cfg.Validate(); err != nil {
@@ -42,15 +48,27 @@ func (e *BasicExecutor) Execute(ctx context.Context, cfg ToolConfig) (*Execution
 
 	// Fast path: no retries configured
 	if cfg.MaxRetries == 0 {
+		if cfg.StdinFactory != nil {
+			cfg.Stdin = cfg.StdinFactory()
+		}
 		return e.executeOnce(ctx, cfg)
 	}
 
-	// Retry loop
+	return e.executeWithRetries(ctx, cfg)
+}
+
+// executeWithRetries runs the command with retry logic.
+func (e *BasicExecutor) executeWithRetries(ctx context.Context, cfg ToolConfig) (*ExecutionResult, error) {
 	maxAttempts := 1 + cfg.MaxRetries
 	var lastResult *ExecutionResult
 	var lastErr error
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Recreate stdin from factory for each attempt
+		if cfg.StdinFactory != nil {
+			cfg.Stdin = cfg.StdinFactory()
+		}
+
 		result, err := e.executeOnce(ctx, cfg)
 
 		// Success case
@@ -77,36 +95,37 @@ func (e *BasicExecutor) Execute(ctx context.Context, cfg ToolConfig) (*Execution
 
 		// If not the last attempt, sleep with context awareness
 		if attempt < maxAttempts {
-			if cfg.RetryDelay > 0 {
-				select {
-				case <-time.After(cfg.RetryDelay):
-					// Continue to next attempt
-				case <-ctx.Done():
-					// Context cancelled during retry delay
-					return nil, fmt.Errorf("context done during retry delay: %w", ctx.Err())
-				}
+			if err := e.waitRetryDelay(ctx, cfg.RetryDelay); err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	// All attempts exhausted, construct final error
-	if lastErr != nil {
-		return nil, &RetryExhaustedError{
-			Command:   buildCommandString(cfg.Command, cfg.Args),
-			Attempts:  maxAttempts,
-			LastError: lastErr,
-		}
-	}
+	return nil, e.buildRetryExhaustedError(cfg, maxAttempts, lastResult, lastErr)
+}
 
-	// Last attempt returned non-zero exit code without error
-	finalErr := fmt.Errorf("command exited with code %d", lastResult.ExitCode)
-	if lastResult.Error != "" {
-		finalErr = fmt.Errorf("%s", lastResult.Error)
+func (e *BasicExecutor) waitRetryDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
 	}
-	return nil, &RetryExhaustedError{
-		Command:   buildCommandString(cfg.Command, cfg.Args),
-		Attempts:  maxAttempts,
-		LastError: finalErr,
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("context done during retry delay: %w", ctx.Err())
+	}
+}
+
+func (e *BasicExecutor) buildRetryExhaustedError(cfg ToolConfig, attempts int, lastResult *ExecutionResult, lastErr error) *RetryExhaustedError {
+	cmdStr := buildCommandString(cfg.Command, cfg.Args)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("command exited with code %d", lastResult.ExitCode)
+	}
+	return &RetryExhaustedError{
+		Command:    cmdStr,
+		Attempts:   attempts,
+		LastError:  lastErr,
+		LastResult: lastResult,
 	}
 }
 

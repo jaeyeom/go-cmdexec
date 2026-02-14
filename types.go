@@ -32,9 +32,19 @@ type ToolConfig struct {
 	// These will be added to the current environment
 	Env map[string]string
 
-	// Stdin is an optional reader for providing input to the command
-	// If nil, the command will have no stdin
+	// Stdin is an optional reader for providing input to the command.
+	// If nil, the command will have no stdin.
+	//
+	// WARNING: When using MaxRetries > 0, a single Stdin reader is consumed
+	// on the first attempt and cannot be re-read. Use StdinFactory instead
+	// to provide fresh input for each retry attempt.
 	Stdin io.Reader
+
+	// StdinFactory creates a new stdin reader for each execution attempt.
+	// This is required when combining stdin input with retries, since an
+	// io.Reader is consumed after the first attempt. If both Stdin and
+	// StdinFactory are set, StdinFactory takes precedence.
+	StdinFactory func() io.Reader
 
 	// CommandBuilder defines how to build the command for execution.
 	// If nil, defaults to DirectCommandBuilder for direct execution.
@@ -85,6 +95,13 @@ func (tc *ToolConfig) Validate() error {
 
 	if tc.Timeout < 0 {
 		return &ValidationError{Field: "Timeout", Message: "timeout cannot be negative"}
+	}
+
+	if tc.Stdin != nil && tc.MaxRetries > 0 && tc.StdinFactory == nil {
+		return &ValidationError{
+			Field:   "Stdin",
+			Message: "use StdinFactory instead of Stdin when MaxRetries > 0; a single reader is consumed after the first attempt",
+		}
 	}
 
 	if tc.MaxStdoutBytes < 0 {
@@ -166,6 +183,11 @@ type RetryExhaustedError struct {
 	Command   string
 	Attempts  int
 	LastError error
+
+	// LastResult is the ExecutionResult from the final attempt, if available.
+	// This preserves structured diagnostics (Output, Stderr, ExitCode) that
+	// would otherwise be lost when retries convert results into errors.
+	LastResult *ExecutionResult
 }
 
 func (e *RetryExhaustedError) Error() string {

@@ -28,6 +28,8 @@ type ConcurrentResult struct {
 //     cancellation, I/O failures) return (nil, error) with typed errors.
 //   - Process exit outcomes return (*ExecutionResult, nil). The caller
 //     inspects ExitCode to determine success or failure.
+//   - Retry exhaustion (MaxRetries > 0, all attempts fail) returns
+//     (nil, *RetryExhaustedError). Use LastResult for diagnostics.
 type Executor interface {
 	// Execute runs a tool with the given configuration and returns the result.
 	// See the Executor type documentation for the error contract.
