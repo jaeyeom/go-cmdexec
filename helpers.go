@@ -157,15 +157,10 @@ func OutputWithStdin(ctx context.Context, executor Executor, stdin string, comma
 	cfg := ToolConfig{
 		Command: command,
 		Args:    args,
-		Env:     map[string]string{"STDIN_DATA": stdin}, // Pass stdin data via env for now
 	}
 
-	// For commands that need stdin, we'll need to extend the executor
-	// For now, use a workaround with shell piping
 	if stdin != "" {
-		shellCmd := fmt.Sprintf("echo %q | %s %s", stdin, command, strings.Join(args, " "))
-		cfg.Command = "sh"
-		cfg.Args = []string{"-c", shellCmd}
+		cfg.Stdin = strings.NewReader(stdin)
 	}
 
 	result, err := executor.Execute(ctx, cfg)

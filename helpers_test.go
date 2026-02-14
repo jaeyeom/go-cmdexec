@@ -275,6 +275,165 @@ func TestCombinedOutputWithWorkDir(t *testing.T) {
 	}
 }
 
+func TestOutputWithStdin(t *testing.T) {
+	tests := []struct {
+		name        string
+		stdin       string
+		mockResult  *cmdexec.ExecutionResult
+		mockError   error
+		wantOutput  string
+		wantErr     bool
+		errContains string
+		checkConfig func(t *testing.T, cfg cmdexec.ToolConfig)
+	}{
+		{
+			name:  "passes stdin directly via ToolConfig",
+			stdin: "hello world",
+			mockResult: &cmdexec.ExecutionResult{
+				Command:  "cat",
+				Output:   "hello world",
+				ExitCode: 0,
+			},
+			wantOutput: "hello world",
+			checkConfig: func(t *testing.T, cfg cmdexec.ToolConfig) {
+				if cfg.Command != "cat" {
+					t.Errorf("Command = %q, want %q", cfg.Command, "cat")
+				}
+				if cfg.Stdin == nil {
+					t.Error("Stdin should be set, got nil")
+				}
+			},
+		},
+		{
+			name:  "empty stdin does not set Stdin reader",
+			stdin: "",
+			mockResult: &cmdexec.ExecutionResult{
+				Command:  "echo",
+				Args:     []string{"test"},
+				Output:   "test\n",
+				ExitCode: 0,
+			},
+			wantOutput: "test\n",
+			checkConfig: func(t *testing.T, cfg cmdexec.ToolConfig) {
+				if cfg.Stdin != nil {
+					t.Error("Stdin should be nil for empty stdin")
+				}
+			},
+		},
+		{
+			name:  "multiline stdin",
+			stdin: "line1\nline2\nline3",
+			mockResult: &cmdexec.ExecutionResult{
+				Command:  "cat",
+				Output:   "line1\nline2\nline3",
+				ExitCode: 0,
+			},
+			wantOutput: "line1\nline2\nline3",
+			checkConfig: func(t *testing.T, cfg cmdexec.ToolConfig) {
+				if cfg.Command != "cat" {
+					t.Errorf("Command = %q, want %q", cfg.Command, "cat")
+				}
+				// Should NOT use sh -c workaround
+				if cfg.Command == "sh" {
+					t.Error("should not use shell workaround")
+				}
+			},
+		},
+		{
+			name:  "special characters in stdin",
+			stdin: `$HOME; rm -rf / | grep "test" & echo 'quoted'`,
+			mockResult: &cmdexec.ExecutionResult{
+				Command:  "cat",
+				Output:   `$HOME; rm -rf / | grep "test" & echo 'quoted'`,
+				ExitCode: 0,
+			},
+			wantOutput: `$HOME; rm -rf / | grep "test" & echo 'quoted'`,
+			checkConfig: func(t *testing.T, cfg cmdexec.ToolConfig) {
+				// Should pass stdin directly, not through shell
+				if cfg.Command == "sh" {
+					t.Error("should not use shell workaround for special characters")
+				}
+			},
+		},
+		{
+			name:  "non-zero exit code",
+			stdin: "input",
+			mockResult: &cmdexec.ExecutionResult{
+				Command:  "failing-cmd",
+				ExitCode: 1,
+				Stderr:   "error occurred",
+			},
+			wantErr:     true,
+			errContains: "exit status 1",
+		},
+		{
+			name:        "execution error",
+			stdin:       "input",
+			mockError:   &cmdexec.ExecutableNotFoundError{Command: "notfound"},
+			wantErr:     true,
+			errContains: "failed to execute",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := cmdexec.NewMockExecutor()
+			mock.SetResult(tt.mockResult, tt.mockError)
+
+			output, err := cmdexec.OutputWithStdin(context.Background(), mock, tt.stdin, "cat")
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("OutputWithStdin() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("OutputWithStdin() error = %v, should contain %q", err, tt.errContains)
+			}
+
+			if !tt.wantErr && string(output) != tt.wantOutput {
+				t.Errorf("OutputWithStdin() = %q, want %q", output, tt.wantOutput)
+			}
+
+			if tt.checkConfig != nil {
+				executions := mock.Executions()
+				if len(executions) != 1 {
+					t.Fatalf("Expected 1 execution, got %d", len(executions))
+				}
+				tt.checkConfig(t, executions[0])
+			}
+		})
+	}
+}
+
+func TestCombinedOutputWithStdin(t *testing.T) {
+	mock := cmdexec.NewMockExecutor()
+	mock.SetResult(&cmdexec.ExecutionResult{
+		Command:  "cat",
+		Output:   "hello",
+		Stderr:   "warning",
+		ExitCode: 0,
+	}, nil)
+
+	output, err := cmdexec.CombinedOutputWithStdin(context.Background(), mock, "hello", "cat")
+	if err != nil {
+		t.Fatalf("CombinedOutputWithStdin() error = %v", err)
+	}
+
+	expected := "hello\nwarning"
+	if string(output) != expected {
+		t.Errorf("CombinedOutputWithStdin() = %q, want %q", output, expected)
+	}
+
+	executions := mock.Executions()
+	if len(executions) != 1 {
+		t.Fatalf("Expected 1 execution, got %d", len(executions))
+	}
+	if executions[0].Stdin == nil {
+		t.Error("Stdin should be set")
+	}
+}
+
 func TestExitError(t *testing.T) {
 	tests := []struct {
 		name     string
