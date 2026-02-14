@@ -516,3 +516,260 @@ func TestBasicExecutor_Execute_TimeoutTiming(t *testing.T) {
 		t.Errorf("Command took too long: %v, expected at most: %v", duration, expectedMax)
 	}
 }
+
+func TestBasicExecutor_Execute_RetrySuccessAfterFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping retry test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	// Create a temp file as a counter. The shell script increments the
+	// count and fails until the count reaches 3 (the 3rd attempt).
+	counterFile, err := os.CreateTemp("", "retry-counter-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(counterFile.Name()) }()
+	if _, err := counterFile.WriteString("0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := counterFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Script: read counter, increment, write back, exit 1 if < 3, else exit 0
+	script := `count=$(cat ` + counterFile.Name() + `); count=$((count+1)); echo $count > ` + counterFile.Name() + `; if [ $count -lt 3 ]; then exit 1; fi; echo success`
+
+	cfg := ToolConfig{
+		Command:    "sh",
+		Args:       []string{"-c", script},
+		MaxRetries: 4, // Up to 5 attempts total, should succeed on 3rd
+		RetryDelay: 10 * time.Millisecond,
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() unexpected error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("Execute() returned nil result")
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+	if !strings.Contains(result.Output, "success") {
+		t.Errorf("Output = %q, want to contain 'success'", result.Output)
+	}
+}
+
+func TestBasicExecutor_Execute_RetryExhausted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping retry test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	cfg := ToolConfig{
+		Command:    "sh",
+		Args:       []string{"-c", "exit 1"},
+		MaxRetries: 2, // 3 total attempts, all fail
+		RetryDelay: 10 * time.Millisecond,
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err == nil {
+		t.Fatal("Execute() expected error, got nil")
+	}
+	if result != nil {
+		t.Errorf("Execute() expected nil result, got %+v", result)
+	}
+
+	var retryErr *RetryExhaustedError
+	if !errors.As(err, &retryErr) {
+		t.Fatalf("Expected RetryExhaustedError, got %T: %v", err, err)
+	}
+	if retryErr.Attempts != 3 {
+		t.Errorf("Attempts = %d, want 3", retryErr.Attempts)
+	}
+	if !strings.Contains(retryErr.Command, "sh") {
+		t.Errorf("Command = %q, want to contain 'sh'", retryErr.Command)
+	}
+	if retryErr.LastError == nil {
+		t.Error("LastError is nil, want non-nil")
+	}
+}
+
+func TestBasicExecutor_Execute_RetryContextCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping retry test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+
+	// Use a long retry delay so the context cancel fires during sleep
+	cfg := ToolConfig{
+		Command:    "sh",
+		Args:       []string{"-c", "exit 1"},
+		MaxRetries: 100,
+		RetryDelay: 5 * time.Second,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	var result *ExecutionResult
+	var err error
+
+	go func() {
+		result, err = executor.Execute(ctx, cfg)
+		close(done)
+	}()
+
+	// Give time for first attempt to fail and enter retry delay
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// Good, returned promptly
+	case <-time.After(2 * time.Second):
+		t.Fatal("Execute() did not respond to context cancellation")
+	}
+
+	if err == nil {
+		t.Fatal("Expected error after context cancellation")
+	}
+	if result != nil {
+		t.Error("Expected nil result after context cancellation")
+	}
+}
+
+func TestBasicExecutor_Execute_RetryDelayTiming(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping retry test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	retryDelay := 100 * time.Millisecond
+	cfg := ToolConfig{
+		Command:    "sh",
+		Args:       []string{"-c", "exit 1"},
+		MaxRetries: 2, // 3 attempts = 2 delays
+		RetryDelay: retryDelay,
+	}
+
+	start := time.Now()
+	_, _ = executor.Execute(ctx, cfg)
+	duration := time.Since(start)
+
+	// 2 delays of 100ms each = at least 200ms
+	expectedMin := 2 * retryDelay
+	if duration < expectedMin {
+		t.Errorf("Duration = %v, want at least %v (2 retry delays)", duration, expectedMin)
+	}
+}
+
+func TestBasicExecutor_Execute_NoRetryOnZeroMaxRetries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping retry test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	// With MaxRetries=0, a failing command should return result, nil (not RetryExhaustedError)
+	cfg := ToolConfig{
+		Command:    "sh",
+		Args:       []string{"-c", "exit 1"},
+		MaxRetries: 0,
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() with MaxRetries=0 unexpected error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("Execute() returned nil result")
+	}
+	if result.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", result.ExitCode)
+	}
+}
+
+func TestBasicExecutor_Execute_RetryNotFoundNotRetried(t *testing.T) {
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	cfg := ToolConfig{
+		Command:    "nonexistent-command-that-should-not-exist",
+		MaxRetries: 3,
+		RetryDelay: 10 * time.Millisecond,
+	}
+
+	start := time.Now()
+	_, err := executor.Execute(ctx, cfg)
+	duration := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Expected error for nonexistent command")
+	}
+
+	var notFoundErr *ExecutableNotFoundError
+	if !errors.As(err, &notFoundErr) {
+		t.Fatalf("Expected ExecutableNotFoundError, got %T: %v", err, err)
+	}
+
+	// Should return immediately without any retry delays
+	if duration > 500*time.Millisecond {
+		t.Errorf("Duration = %v, expected immediate return (no retries)", duration)
+	}
+}
+
+func TestBasicExecutor_Execute_RetryWithTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping retry test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	// Create a counter file to track attempts
+	counterFile, err := os.CreateTemp("", "retry-timeout-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(counterFile.Name()) }()
+	if _, err := counterFile.WriteString("0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := counterFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Script that times out on first attempt, succeeds on second
+	script := `count=$(cat ` + counterFile.Name() + `); count=$((count+1)); echo $count > ` + counterFile.Name() + `; if [ $count -lt 2 ]; then sleep 5; fi; echo done`
+
+	cfg := ToolConfig{
+		Command:    "sh",
+		Args:       []string{"-c", script},
+		Timeout:    200 * time.Millisecond,
+		MaxRetries: 2,
+		RetryDelay: 10 * time.Millisecond,
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() unexpected error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("Execute() returned nil result")
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+}

@@ -3,6 +3,7 @@ package cmdexec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,6 +26,78 @@ func (e *BasicExecutor) Execute(ctx context.Context, cfg ToolConfig) (*Execution
 		return nil, err
 	}
 
+	// Fast path: no retries configured
+	if cfg.MaxRetries == 0 {
+		return e.executeOnce(ctx, cfg)
+	}
+
+	// Retry loop
+	maxAttempts := 1 + cfg.MaxRetries
+	var lastResult *ExecutionResult
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		result, err := e.executeOnce(ctx, cfg)
+
+		// Success case
+		if err == nil && result.ExitCode == 0 {
+			return result, nil
+		}
+
+		// Non-retryable error: executable not found
+		if _, isNotFound := err.(*ExecutableNotFoundError); isNotFound {
+			return nil, err
+		}
+
+		// Abort retries on context cancellation/timeout
+		if ctx.Err() != nil {
+			if err != nil {
+				return nil, err
+			}
+			return nil, ctx.Err()
+		}
+
+		// Store last attempt for final error reporting
+		lastResult = result
+		lastErr = err
+
+		// If not the last attempt, sleep with context awareness
+		if attempt < maxAttempts {
+			if cfg.RetryDelay > 0 {
+				select {
+				case <-time.After(cfg.RetryDelay):
+					// Continue to next attempt
+				case <-ctx.Done():
+					// Context cancelled during retry delay
+					return nil, ctx.Err()
+				}
+			}
+		}
+	}
+
+	// All attempts exhausted, construct final error
+	if lastErr != nil {
+		return nil, &RetryExhaustedError{
+			Command:   buildCommandString(cfg.Command, cfg.Args),
+			Attempts:  maxAttempts,
+			LastError: lastErr,
+		}
+	}
+
+	// Last attempt returned non-zero exit code without error
+	finalErr := fmt.Errorf("command exited with code %d", lastResult.ExitCode)
+	if lastResult.Error != "" {
+		finalErr = fmt.Errorf("%s", lastResult.Error)
+	}
+	return nil, &RetryExhaustedError{
+		Command:   buildCommandString(cfg.Command, cfg.Args),
+		Attempts:  maxAttempts,
+		LastError: finalErr,
+	}
+}
+
+// executeOnce performs a single execution attempt.
+func (e *BasicExecutor) executeOnce(ctx context.Context, cfg ToolConfig) (*ExecutionResult, error) {
 	execCtx, cancel := e.createExecutionContext(ctx, cfg.Timeout)
 	if cancel != nil {
 		defer cancel()
@@ -109,7 +182,7 @@ func (e *BasicExecutor) processExecutionError(err error, command string) (int, e
 		return 0, nil
 	}
 
-	if err == exec.ErrNotFound {
+	if errors.Is(err, exec.ErrNotFound) {
 		return 0, &ExecutableNotFoundError{Command: command}
 	}
 
