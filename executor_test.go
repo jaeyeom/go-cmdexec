@@ -1,6 +1,7 @@
 package cmdexec
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -885,5 +886,119 @@ func TestBasicExecutor_Execute_RetryWithTimeout(t *testing.T) {
 	}
 	if result.ExitCode != 0 {
 		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+}
+
+func TestBasicExecutor_Execute_StdoutWriter(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping streaming test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	var streamed bytes.Buffer
+	cfg := ToolConfig{
+		Command:      "echo",
+		Args:         []string{"hello streaming"},
+		StdoutWriter: &streamed,
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Both the result buffer and the streaming writer should have the output
+	if result.Output != "hello streaming\n" {
+		t.Errorf("result.Output = %q, want %q", result.Output, "hello streaming\n")
+	}
+	if streamed.String() != "hello streaming\n" {
+		t.Errorf("streamed output = %q, want %q", streamed.String(), "hello streaming\n")
+	}
+}
+
+func TestBasicExecutor_Execute_StderrWriter(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping streaming test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	var streamed bytes.Buffer
+	cfg := ToolConfig{
+		Command:      "sh",
+		Args:         []string{"-c", "echo error-output >&2"},
+		StderrWriter: &streamed,
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if result.Stderr != "error-output\n" {
+		t.Errorf("result.Stderr = %q, want %q", result.Stderr, "error-output\n")
+	}
+	if streamed.String() != "error-output\n" {
+		t.Errorf("streamed stderr = %q, want %q", streamed.String(), "error-output\n")
+	}
+}
+
+func TestBasicExecutor_Execute_BothWriters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping streaming test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	var streamedOut, streamedErr bytes.Buffer
+	cfg := ToolConfig{
+		Command:      "sh",
+		Args:         []string{"-c", "echo stdout-data; echo stderr-data >&2"},
+		StdoutWriter: &streamedOut,
+		StderrWriter: &streamedErr,
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Internal buffers preserved
+	if result.Output != "stdout-data\n" {
+		t.Errorf("result.Output = %q, want %q", result.Output, "stdout-data\n")
+	}
+	if result.Stderr != "stderr-data\n" {
+		t.Errorf("result.Stderr = %q, want %q", result.Stderr, "stderr-data\n")
+	}
+
+	// Streaming writers received the same data
+	if streamedOut.String() != "stdout-data\n" {
+		t.Errorf("streamed stdout = %q, want %q", streamedOut.String(), "stdout-data\n")
+	}
+	if streamedErr.String() != "stderr-data\n" {
+		t.Errorf("streamed stderr = %q, want %q", streamedErr.String(), "stderr-data\n")
+	}
+}
+
+func TestBasicExecutor_Execute_NilWritersPreserveBehavior(t *testing.T) {
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	// Without writers, behavior should be unchanged
+	cfg := ToolConfig{
+		Command: "echo",
+		Args:    []string{"unchanged"},
+	}
+
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Output != "unchanged\n" {
+		t.Errorf("result.Output = %q, want %q", result.Output, "unchanged\n")
 	}
 }

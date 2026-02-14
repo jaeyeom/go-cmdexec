@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -124,7 +125,7 @@ func (e *BasicExecutor) executeOnce(ctx context.Context, cfg ToolConfig) (*Execu
 		"args", cfg.Args,
 		"working_dir", cfg.WorkingDir)
 
-	stdout, stderr, startTime, endTime, err := e.executeCommand(cmd)
+	stdout, stderr, startTime, endTime, err := e.executeCommand(cmd, cfg)
 
 	if timedOut := e.handleTimeout(execCtx, err, cfg); timedOut {
 		return nil, &TimeoutError{
@@ -174,10 +175,20 @@ func (e *BasicExecutor) setupCommand(cmd *exec.Cmd, cfg ToolConfig) {
 	}
 }
 
-func (e *BasicExecutor) executeCommand(cmd *exec.Cmd) (bytes.Buffer, bytes.Buffer, time.Time, time.Time, error) {
+func (e *BasicExecutor) executeCommand(cmd *exec.Cmd, cfg ToolConfig) (bytes.Buffer, bytes.Buffer, time.Time, time.Time, error) {
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+
+	if cfg.StdoutWriter != nil {
+		cmd.Stdout = io.MultiWriter(&stdout, cfg.StdoutWriter)
+	} else {
+		cmd.Stdout = &stdout
+	}
+
+	if cfg.StderrWriter != nil {
+		cmd.Stderr = io.MultiWriter(&stderr, cfg.StderrWriter)
+	} else {
+		cmd.Stderr = &stderr
+	}
 
 	startTime := time.Now()
 	err := cmd.Run()

@@ -40,6 +40,18 @@ type ToolConfig struct {
 	// If nil, defaults to DirectCommandBuilder for direct execution.
 	// Use ShellCommandBuilder for tools that need shell execution (e.g., Bazel, Gradle).
 	CommandBuilder CommandBuilder
+
+	// StdoutWriter is an optional writer for streaming stdout during execution.
+	// When set, process stdout is tee'd to both this writer and the internal
+	// buffer (ExecutionResult.Output is still populated).
+	// The caller is responsible for thread-safety of the provided writer.
+	StdoutWriter io.Writer
+
+	// StderrWriter is an optional writer for streaming stderr during execution.
+	// When set, process stderr is tee'd to both this writer and the internal
+	// buffer (ExecutionResult.Stderr is still populated).
+	// The caller is responsible for thread-safety of the provided writer.
+	StderrWriter io.Writer
 }
 
 // Validate ensures the ToolConfig has valid data.
