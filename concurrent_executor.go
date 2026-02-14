@@ -22,8 +22,15 @@ type ConcurrentResult struct {
 
 // Executor defines the interface for executing external tools and commands.
 // It is implemented by BasicExecutor for production use and MockExecutor for testing.
+//
+// Error contract for Execute:
+//   - Transport/system errors (timeout, executable not found, context
+//     cancellation, I/O failures) return (nil, error) with typed errors.
+//   - Process exit outcomes return (*ExecutionResult, nil). The caller
+//     inspects ExitCode to determine success or failure.
 type Executor interface {
 	// Execute runs a tool with the given configuration and returns the result.
+	// See the Executor type documentation for the error contract.
 	Execute(ctx context.Context, cfg ToolConfig) (*ExecutionResult, error)
 
 	// IsAvailable checks if a command is available in the system PATH.

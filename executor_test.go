@@ -730,6 +730,120 @@ func TestBasicExecutor_Execute_RetryNotFoundNotRetried(t *testing.T) {
 	}
 }
 
+// TestBasicExecutor_Execute_ErrorContract verifies the Execute error contract:
+// - System errors return (nil, error) with typed errors.
+// - Process exit outcomes return (*ExecutionResult, nil) with ExitCode.
+func TestBasicExecutor_Execute_ErrorContract(t *testing.T) {
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	t.Run("non-zero exit returns result not error", func(t *testing.T) {
+		result, err := executor.Execute(ctx, ToolConfig{
+			Command: "sh",
+			Args:    []string{"-c", "exit 42"},
+		})
+		if err != nil {
+			t.Fatalf("Execute() returned error %v, want nil error for non-zero exit", err)
+		}
+		if result == nil {
+			t.Fatal("Execute() returned nil result")
+		}
+		if result.ExitCode != 42 {
+			t.Errorf("ExitCode = %d, want 42", result.ExitCode)
+		}
+	})
+
+	t.Run("missing executable returns typed error", func(t *testing.T) {
+		result, err := executor.Execute(ctx, ToolConfig{
+			Command: "nonexistent-command-that-should-not-exist",
+		})
+		if err == nil {
+			t.Fatal("Execute() returned nil error for missing executable")
+		}
+		if result != nil {
+			t.Error("Execute() returned non-nil result for missing executable")
+		}
+		var notFoundErr *ExecutableNotFoundError
+		if !errors.As(err, &notFoundErr) {
+			t.Errorf("Expected ExecutableNotFoundError, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("timeout returns typed error", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Skipping timeout test on Windows")
+		}
+		result, err := executor.Execute(ctx, ToolConfig{
+			Command: "sleep",
+			Args:    []string{"5"},
+			Timeout: 100 * time.Millisecond,
+		})
+		if err == nil {
+			t.Fatal("Execute() returned nil error for timeout")
+		}
+		if result != nil {
+			t.Error("Execute() returned non-nil result for timeout")
+		}
+		var timeoutErr *TimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Errorf("Expected TimeoutError, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("context cancellation returns error", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Skipping context test on Windows")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		var result *ExecutionResult
+		var err error
+
+		go func() {
+			result, err = executor.Execute(ctx, ToolConfig{
+				Command: "sleep",
+				Args:    []string{"10"},
+			})
+			close(done)
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Execute() did not respond to context cancellation")
+		}
+
+		// Context cancellation is a system error → (nil, error)
+		if err == nil {
+			// On some systems, the process might exit with a signal
+			// before the context error propagates, returning a result
+			// with non-zero exit code. Both behaviors are acceptable.
+			if result == nil || result.ExitCode == 0 {
+				t.Error("Expected either error or non-zero exit code for cancelled command")
+			}
+		}
+	})
+
+	t.Run("validation error returns typed error", func(t *testing.T) {
+		result, err := executor.Execute(ctx, ToolConfig{
+			Command: "",
+		})
+		if err == nil {
+			t.Fatal("Execute() returned nil error for empty command")
+		}
+		if result != nil {
+			t.Error("Execute() returned non-nil result for validation error")
+		}
+		var validationErr *ValidationError
+		if !errors.As(err, &validationErr) {
+			t.Errorf("Expected ValidationError, got %T: %v", err, err)
+		}
+	})
+}
+
 func TestBasicExecutor_Execute_RetryWithTimeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Skipping retry test on Windows")

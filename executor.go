@@ -21,6 +21,19 @@ func NewBasicExecutor() *BasicExecutor {
 }
 
 // Execute runs a tool with the given configuration and returns the result.
+//
+// Error contract:
+//   - Transport/system errors (timeout, executable not found, context
+//     cancellation, I/O failures) return (nil, error) with typed errors.
+//   - Process exit outcomes return (*ExecutionResult, nil). The caller
+//     inspects ExitCode to determine success or failure.
+//
+// Typed errors returned:
+//   - *ValidationError: invalid ToolConfig fields.
+//   - *TimeoutError: command exceeded configured Timeout.
+//   - *ExecutableNotFoundError: command not found in PATH.
+//   - *RetryExhaustedError: all retry attempts failed (wraps last error).
+//   - context.Canceled / context.DeadlineExceeded: context was cancelled.
 func (e *BasicExecutor) Execute(ctx context.Context, cfg ToolConfig) (*ExecutionResult, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -125,7 +138,7 @@ func (e *BasicExecutor) executeOnce(ctx context.Context, cfg ToolConfig) (*Execu
 		return nil, err
 	}
 
-	return e.buildExecutionResult(cfg, stdout, stderr, startTime, endTime, exitCode, err), nil
+	return e.buildExecutionResult(cfg, stdout, stderr, startTime, endTime, exitCode), nil
 }
 
 func (e *BasicExecutor) createExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -186,15 +199,22 @@ func (e *BasicExecutor) processExecutionError(err error, command string) (int, e
 		return 0, &ExecutableNotFoundError{Command: command}
 	}
 
+	// Context cancellation is a system-level error, not a process exit.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return 0, err
+	}
+
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		return exitErr.ExitCode(), nil
 	}
 
-	return -1, nil
+	// Unknown execution errors (I/O failures, permission errors, etc.)
+	// are returned rather than silently converted to exit code -1.
+	return 0, fmt.Errorf("command %q: %w", command, err)
 }
 
-func (e *BasicExecutor) buildExecutionResult(cfg ToolConfig, stdout, stderr bytes.Buffer, startTime, endTime time.Time, exitCode int, execErr error) *ExecutionResult {
-	result := &ExecutionResult{
+func (e *BasicExecutor) buildExecutionResult(cfg ToolConfig, stdout, stderr bytes.Buffer, startTime, endTime time.Time, exitCode int) *ExecutionResult {
+	return &ExecutionResult{
 		Command:    cfg.Command,
 		Args:       cfg.Args,
 		WorkingDir: cfg.WorkingDir,
@@ -205,12 +225,6 @@ func (e *BasicExecutor) buildExecutionResult(cfg ToolConfig, stdout, stderr byte
 		EndTime:    endTime,
 		TimedOut:   false,
 	}
-
-	if execErr != nil && execErr != exec.ErrNotFound {
-		result.Error = execErr.Error()
-	}
-
-	return result
 }
 
 // IsAvailable checks if a command is available in the system PATH.
