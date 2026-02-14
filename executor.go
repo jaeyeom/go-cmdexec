@@ -125,21 +125,21 @@ func (e *BasicExecutor) executeOnce(ctx context.Context, cfg ToolConfig) (*Execu
 		"args", cfg.Args,
 		"working_dir", cfg.WorkingDir)
 
-	stdout, stderr, startTime, endTime, err := e.executeCommand(cmd, cfg)
+	cr := e.executeCommand(cmd, cfg)
 
-	if timedOut := e.handleTimeout(execCtx, err, cfg); timedOut {
+	if timedOut := e.handleTimeout(execCtx, cr.err, cfg); timedOut {
 		return nil, &TimeoutError{
 			Command: buildCommandString(cfg.Command, cfg.Args),
 			Timeout: cfg.Timeout,
 		}
 	}
 
-	exitCode, err := e.processExecutionError(err, cfg.Command)
+	exitCode, err := e.processExecutionError(cr.err, cfg.Command)
 	if err != nil {
 		return nil, err
 	}
 
-	return e.buildExecutionResult(cfg, stdout, stderr, startTime, endTime, exitCode), nil
+	return e.buildExecutionResult(cfg, cr, exitCode), nil
 }
 
 func (e *BasicExecutor) createExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -175,26 +175,78 @@ func (e *BasicExecutor) setupCommand(cmd *exec.Cmd, cfg ToolConfig) {
 	}
 }
 
-func (e *BasicExecutor) executeCommand(cmd *exec.Cmd, cfg ToolConfig) (bytes.Buffer, bytes.Buffer, time.Time, time.Time, error) {
-	var stdout, stderr bytes.Buffer
+type executeCommandResult struct {
+	stdout, stderr           bytes.Buffer
+	startTime, endTime       time.Time
+	stdoutTrunc, stderrTrunc bool
+	err                      error
+}
 
+func (e *BasicExecutor) executeCommand(cmd *exec.Cmd, cfg ToolConfig) executeCommandResult {
+	var r executeCommandResult
+	var stdoutW, stderrW io.Writer = &r.stdout, &r.stderr
+
+	// Apply output size limits
+	var stdoutLW, stderrLW *limitedWriter
+	if cfg.MaxStdoutBytes > 0 {
+		stdoutLW = &limitedWriter{w: &r.stdout, n: cfg.MaxStdoutBytes}
+		stdoutW = stdoutLW
+	}
+	if cfg.MaxStderrBytes > 0 {
+		stderrLW = &limitedWriter{w: &r.stderr, n: cfg.MaxStderrBytes}
+		stderrW = stderrLW
+	}
+
+	// Apply streaming writers via tee
 	if cfg.StdoutWriter != nil {
-		cmd.Stdout = io.MultiWriter(&stdout, cfg.StdoutWriter)
-	} else {
-		cmd.Stdout = &stdout
+		stdoutW = io.MultiWriter(stdoutW, cfg.StdoutWriter)
 	}
-
 	if cfg.StderrWriter != nil {
-		cmd.Stderr = io.MultiWriter(&stderr, cfg.StderrWriter)
-	} else {
-		cmd.Stderr = &stderr
+		stderrW = io.MultiWriter(stderrW, cfg.StderrWriter)
 	}
 
-	startTime := time.Now()
-	err := cmd.Run()
-	endTime := time.Now()
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 
-	return stdout, stderr, startTime, endTime, err //nolint:wrapcheck // Need to preserve original error type for exit code extraction
+	r.startTime = time.Now()
+	r.err = cmd.Run()
+	r.endTime = time.Now()
+
+	if stdoutLW != nil {
+		r.stdoutTrunc = stdoutLW.truncated
+	}
+	if stderrLW != nil {
+		r.stderrTrunc = stderrLW.truncated
+	}
+
+	return r
+}
+
+// limitedWriter wraps a writer and stops writing after n bytes,
+// silently discarding excess data while tracking truncation.
+type limitedWriter struct {
+	w         io.Writer
+	n         int64 // bytes remaining
+	truncated bool
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	if lw.n <= 0 {
+		lw.truncated = true
+		return len(p), nil
+	}
+	if int64(len(p)) > lw.n {
+		lw.truncated = true
+		n, err := lw.w.Write(p[:lw.n])
+		lw.n = 0
+		if err != nil {
+			return n, err //nolint:wrapcheck
+		}
+		return len(p), nil
+	}
+	n, err := lw.w.Write(p)
+	lw.n -= int64(n)
+	return n, err //nolint:wrapcheck
 }
 
 func (e *BasicExecutor) handleTimeout(ctx context.Context, err error, cfg ToolConfig) bool {
@@ -224,17 +276,19 @@ func (e *BasicExecutor) processExecutionError(err error, command string) (int, e
 	return 0, fmt.Errorf("command %q: %w", command, err)
 }
 
-func (e *BasicExecutor) buildExecutionResult(cfg ToolConfig, stdout, stderr bytes.Buffer, startTime, endTime time.Time, exitCode int) *ExecutionResult {
+func (e *BasicExecutor) buildExecutionResult(cfg ToolConfig, cr executeCommandResult, exitCode int) *ExecutionResult {
 	return &ExecutionResult{
-		Command:    cfg.Command,
-		Args:       cfg.Args,
-		WorkingDir: cfg.WorkingDir,
-		Output:     stdout.String(),
-		Stderr:     stderr.String(),
-		ExitCode:   exitCode,
-		StartTime:  startTime,
-		EndTime:    endTime,
-		TimedOut:   false,
+		Command:         cfg.Command,
+		Args:            cfg.Args,
+		WorkingDir:      cfg.WorkingDir,
+		Output:          cr.stdout.String(),
+		Stderr:          cr.stderr.String(),
+		ExitCode:        exitCode,
+		StartTime:       cr.startTime,
+		EndTime:         cr.endTime,
+		TimedOut:        false,
+		StdoutTruncated: cr.stdoutTrunc,
+		StderrTruncated: cr.stderrTrunc,
 	}
 }
 

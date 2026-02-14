@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -1000,5 +1001,194 @@ func TestBasicExecutor_Execute_NilWritersPreserveBehavior(t *testing.T) {
 	}
 	if result.Output != "unchanged\n" {
 		t.Errorf("result.Output = %q, want %q", result.Output, "unchanged\n")
+	}
+}
+
+func TestBasicExecutor_Execute_CommandValidator(t *testing.T) {
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	t.Run("allowed command executes normally", func(t *testing.T) {
+		cfg := ToolConfig{
+			Command:          "echo",
+			Args:             []string{"hello"},
+			CommandValidator: AllowCommands("echo", "cat"),
+		}
+		result, err := executor.Execute(ctx, cfg)
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if result.Output != "hello\n" {
+			t.Errorf("Output = %q, want %q", result.Output, "hello\n")
+		}
+	})
+
+	t.Run("blocked command returns typed error", func(t *testing.T) {
+		cfg := ToolConfig{
+			Command:          "rm",
+			Args:             []string{"-rf", "/"},
+			CommandValidator: AllowCommands("echo", "cat"),
+		}
+		result, err := executor.Execute(ctx, cfg)
+		if err == nil {
+			t.Fatal("Execute() expected error for blocked command")
+		}
+		if result != nil {
+			t.Error("Execute() expected nil result for blocked command")
+		}
+		var notAllowed *CommandNotAllowedError
+		if !errors.As(err, &notAllowed) {
+			t.Fatalf("Expected CommandNotAllowedError, got %T: %v", err, err)
+		}
+		if notAllowed.Command != "rm" {
+			t.Errorf("Command = %q, want %q", notAllowed.Command, "rm")
+		}
+	})
+
+	t.Run("custom validator", func(t *testing.T) {
+		cfg := ToolConfig{
+			Command: "dangerous-cmd",
+			CommandValidator: func(cmd string, _ []string) error {
+				if cmd == "dangerous-cmd" {
+					return fmt.Errorf("dangerous commands are forbidden")
+				}
+				return nil
+			},
+		}
+		_, err := executor.Execute(ctx, cfg)
+		if err == nil {
+			t.Fatal("Execute() expected error for custom validator rejection")
+		}
+		var notAllowed *CommandNotAllowedError
+		if !errors.As(err, &notAllowed) {
+			t.Fatalf("Expected CommandNotAllowedError, got %T: %v", err, err)
+		}
+		if !strings.Contains(notAllowed.Reason, "dangerous commands are forbidden") {
+			t.Errorf("Reason = %q, want to contain 'dangerous commands are forbidden'", notAllowed.Reason)
+		}
+	})
+
+	t.Run("nil validator allows all commands", func(t *testing.T) {
+		cfg := ToolConfig{
+			Command:          "echo",
+			Args:             []string{"allowed"},
+			CommandValidator: nil,
+		}
+		result, err := executor.Execute(ctx, cfg)
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if result.Output != "allowed\n" {
+			t.Errorf("Output = %q, want %q", result.Output, "allowed\n")
+		}
+	})
+}
+
+func TestBasicExecutor_Execute_MaxStdoutBytes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping output limit test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	t.Run("output within limit is not truncated", func(t *testing.T) {
+		cfg := ToolConfig{
+			Command:        "echo",
+			Args:           []string{"short"},
+			MaxStdoutBytes: 1000,
+		}
+		result, err := executor.Execute(ctx, cfg)
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if result.Output != "short\n" {
+			t.Errorf("Output = %q, want %q", result.Output, "short\n")
+		}
+		if result.StdoutTruncated {
+			t.Error("StdoutTruncated should be false")
+		}
+	})
+
+	t.Run("output exceeding limit is truncated", func(t *testing.T) {
+		cfg := ToolConfig{
+			Command:        "sh",
+			Args:           []string{"-c", "printf '%0100s'"},
+			MaxStdoutBytes: 10,
+		}
+		result, err := executor.Execute(ctx, cfg)
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if len(result.Output) != 10 {
+			t.Errorf("Output length = %d, want 10", len(result.Output))
+		}
+		if !result.StdoutTruncated {
+			t.Error("StdoutTruncated should be true")
+		}
+	})
+
+	t.Run("zero limit means no limit", func(t *testing.T) {
+		cfg := ToolConfig{
+			Command:        "sh",
+			Args:           []string{"-c", "printf '%0100s'"},
+			MaxStdoutBytes: 0,
+		}
+		result, err := executor.Execute(ctx, cfg)
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if len(result.Output) != 100 {
+			t.Errorf("Output length = %d, want 100", len(result.Output))
+		}
+		if result.StdoutTruncated {
+			t.Error("StdoutTruncated should be false")
+		}
+	})
+}
+
+func TestBasicExecutor_Execute_MaxStderrBytes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping output limit test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+	ctx := context.Background()
+
+	cfg := ToolConfig{
+		Command:        "sh",
+		Args:           []string{"-c", "printf '%0100s' >&2"},
+		MaxStderrBytes: 10,
+	}
+	result, err := executor.Execute(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(result.Stderr) != 10 {
+		t.Errorf("Stderr length = %d, want 10", len(result.Stderr))
+	}
+	if !result.StderrTruncated {
+		t.Error("StderrTruncated should be true")
+	}
+	// Stdout should be unaffected
+	if result.StdoutTruncated {
+		t.Error("StdoutTruncated should be false")
+	}
+}
+
+func TestAllowCommands(t *testing.T) {
+	validator := AllowCommands("echo", "cat", "ls")
+
+	if err := validator("echo", nil); err != nil {
+		t.Errorf("echo should be allowed: %v", err)
+	}
+	if err := validator("cat", []string{"file.txt"}); err != nil {
+		t.Errorf("cat should be allowed: %v", err)
+	}
+	if err := validator("rm", nil); err == nil {
+		t.Error("rm should not be allowed")
+	}
+	if err := validator("sh", []string{"-c", "echo"}); err == nil {
+		t.Error("sh should not be allowed")
 	}
 }

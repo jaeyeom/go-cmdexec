@@ -38,6 +38,12 @@ type ExecutionResult struct {
 
 	// TimedOut indicates if the command was terminated due to timeout
 	TimedOut bool `json:"timedOut,omitempty"`
+
+	// StdoutTruncated indicates stdout was truncated due to MaxStdoutBytes limit.
+	StdoutTruncated bool `json:"stdoutTruncated,omitempty"`
+
+	// StderrTruncated indicates stderr was truncated due to MaxStderrBytes limit.
+	StderrTruncated bool `json:"stderrTruncated,omitempty"`
 }
 
 // Duration calculates the execution time.
@@ -68,33 +74,37 @@ func (er *ExecutionResult) Validate() error {
 
 // Custom JSON marshaling for time fields to ensure consistent format.
 type executionResultJSON struct {
-	Command    string   `json:"command"`
-	Args       []string `json:"args"`
-	WorkingDir string   `json:"workingDir"`
-	Output     string   `json:"output"`
-	Stderr     string   `json:"stderr"`
-	ExitCode   int      `json:"exitCode"`
-	Error      string   `json:"error,omitempty"`
-	StartTime  string   `json:"startTime"`
-	EndTime    string   `json:"endTime"`
-	Duration   string   `json:"duration"`
-	TimedOut   bool     `json:"timedOut,omitempty"`
+	Command         string   `json:"command"`
+	Args            []string `json:"args"`
+	WorkingDir      string   `json:"workingDir"`
+	Output          string   `json:"output"`
+	Stderr          string   `json:"stderr"`
+	ExitCode        int      `json:"exitCode"`
+	Error           string   `json:"error,omitempty"`
+	StartTime       string   `json:"startTime"`
+	EndTime         string   `json:"endTime"`
+	Duration        string   `json:"duration"`
+	TimedOut        bool     `json:"timedOut,omitempty"`
+	StdoutTruncated bool     `json:"stdoutTruncated,omitempty"`
+	StderrTruncated bool     `json:"stderrTruncated,omitempty"`
 }
 
 // MarshalJSON implements custom JSON marshaling for ExecutionResult.
 func (er ExecutionResult) MarshalJSON() ([]byte, error) {
 	data, err := json.Marshal(executionResultJSON{
-		Command:    er.Command,
-		Args:       er.Args,
-		WorkingDir: er.WorkingDir,
-		Output:     er.Output,
-		Stderr:     er.Stderr,
-		ExitCode:   er.ExitCode,
-		Error:      er.Error,
-		StartTime:  er.StartTime.Format(time.RFC3339Nano),
-		EndTime:    er.EndTime.Format(time.RFC3339Nano),
-		Duration:   er.Duration().String(),
-		TimedOut:   er.TimedOut,
+		Command:         er.Command,
+		Args:            er.Args,
+		WorkingDir:      er.WorkingDir,
+		Output:          er.Output,
+		Stderr:          er.Stderr,
+		ExitCode:        er.ExitCode,
+		Error:           er.Error,
+		StartTime:       er.StartTime.Format(time.RFC3339Nano),
+		EndTime:         er.EndTime.Format(time.RFC3339Nano),
+		Duration:        er.Duration().String(),
+		TimedOut:        er.TimedOut,
+		StdoutTruncated: er.StdoutTruncated,
+		StderrTruncated: er.StderrTruncated,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal ExecutionResult: %w", err)
@@ -129,6 +139,8 @@ func (er *ExecutionResult) UnmarshalJSON(data []byte) error {
 	er.StartTime = startTime
 	er.EndTime = endTime
 	er.TimedOut = aux.TimedOut
+	er.StdoutTruncated = aux.StdoutTruncated
+	er.StderrTruncated = aux.StderrTruncated
 
 	return nil
 }
