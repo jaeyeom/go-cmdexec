@@ -61,7 +61,7 @@ func (sh *SignalHandler) Start() (context.Context, error) {
 	sh.wg.Add(1)
 	go sh.handleSignals()
 
-	slog.Info("Signal handler started", "signals", []string{"SIGINT", "SIGTERM", "SIGHUP"})
+	slog.Debug("Signal handler started", "signals", []string{"SIGINT", "SIGTERM", "SIGHUP"})
 
 	return ctx, nil
 }
@@ -88,7 +88,7 @@ func (sh *SignalHandler) Stop() {
 	sh.wg.Wait()
 
 	sh.running = false
-	slog.Info("Signal handler stopped")
+	slog.Debug("Signal handler stopped")
 }
 
 // handleSignals processes incoming OS signals.
@@ -96,13 +96,13 @@ func (sh *SignalHandler) handleSignals() {
 	defer sh.wg.Done()
 
 	for sig := range sh.signals {
-		slog.Info("Received signal", "signal", sig.String())
+		slog.Debug("Received signal", "signal", sig.String())
 
 		switch sig {
 		case unix.SIGINT, unix.SIGTERM:
 			// Cancel the context for graceful shutdown
 			if sh.cancel != nil {
-				slog.Info("Initiating graceful shutdown", "signal", sig.String())
+				slog.Debug("Initiating graceful shutdown", "signal", sig.String())
 				sh.cancel()
 			}
 			// For SIGINT/SIGTERM, we stop listening for more signals
@@ -110,7 +110,7 @@ func (sh *SignalHandler) handleSignals() {
 			return
 		case unix.SIGHUP:
 			// SIGHUP typically means reload configuration, but for now we just log it
-			slog.Info("Received SIGHUP signal (reload not implemented)")
+			slog.Debug("Received SIGHUP signal (reload not implemented)")
 		}
 	}
 }

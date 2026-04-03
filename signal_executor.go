@@ -36,7 +36,7 @@ func (e *WithSignalHandling) Stop() {
 	// Cancel all running processes
 	e.mu.Lock()
 	for id, cancel := range e.processes {
-		slog.Info("Cancelling process", "id", id)
+		slog.Debug("Cancelling process", "id", id)
 		cancel()
 	}
 	e.processes = make(map[string]context.CancelFunc)
