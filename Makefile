@@ -1,7 +1,7 @@
 # go-cmdexec Makefile
 # Go library — no binary targets
 
-.PHONY: all check format check-format format-md check-format-md lint fix test vet check-semgrep coverage coverage-html coverage-report clean clean-coverage
+.PHONY: all check build format check-format format-md check-format-md lint fix test vet check-semgrep coverage coverage-html coverage-report clean clean-coverage
 
 COVERAGE_DIR  := .coverage
 COVERAGE_FILE := $(COVERAGE_DIR)/coverage.out
@@ -11,10 +11,10 @@ COVERAGE_THRESHOLD := 80
 # ---------- top-level workflows ----------
 
 ## all: full local workflow (format, fix, then validate)
-all: format fix test vet check-semgrep
+all: format fix test vet build check-semgrep
 
 ## check: CI-friendly, non-mutating checks
-check: check-format lint test vet check-semgrep
+check: check-format lint test vet build check-semgrep
 
 # ---------- format ----------
 
@@ -49,6 +49,12 @@ fix: format
 ## check-semgrep: run semgrep static analysis
 check-semgrep:
 	@semgrep scan --config auto .
+
+# ---------- build ----------
+
+## build: compile all packages (catch errors early)
+build:
+	@go build ./...
 
 # ---------- test ----------
 
