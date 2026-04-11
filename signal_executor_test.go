@@ -1,8 +1,9 @@
+//go:build unix
+
 package cmdexec
 
 import (
 	"os"
-	"runtime"
 	"testing"
 	"time"
 
@@ -82,10 +83,6 @@ func TestWithSignalHandling_Execute(t *testing.T) {
 }
 
 func TestWithSignalHandling_ProcessTracking(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping process tracking test on Windows")
-	}
-
 	executor := NewWithSignalHandling()
 
 	ctx, err := executor.Start()
@@ -137,10 +134,6 @@ func TestWithSignalHandling_ProcessTracking(t *testing.T) {
 }
 
 func TestWithSignalHandling_SignalCancellation(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping signal cancellation test on Windows")
-	}
-
 	executor := NewWithSignalHandling()
 
 	ctx, err := executor.Start()

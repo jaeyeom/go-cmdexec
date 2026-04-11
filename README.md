@@ -249,6 +249,11 @@ if err != nil {
 
 `ExecutionResult` supports custom JSON marshaling with RFC3339Nano timestamps and a computed `duration` field, making it suitable for structured logging and storage.
 
+## Requirements
+
+- **Go 1.24.4** or later (as specified in `go.mod`)
+- **Platform**: Unix-based systems (Linux, macOS, FreeBSD). Signal handling (`SignalHandler`, `WithSignalHandling`) is Unix-only via build tags. The core API (`BasicExecutor`, `ConcurrentExecutor`, `MockExecutor`, helpers) works on all platforms.
+
 ## Development
 
 ```bash
@@ -261,4 +266,4 @@ make coverage     # generate coverage profile
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+Apache License 2.0. See [LICENSE](LICENSE) for details.

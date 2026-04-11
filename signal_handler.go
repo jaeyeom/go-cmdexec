@@ -1,3 +1,5 @@
+//go:build unix
+
 package cmdexec
 
 import (
@@ -30,9 +32,7 @@ type SignalHandler struct {
 
 // NewSignalHandler creates a new signal handler.
 func NewSignalHandler() *SignalHandler {
-	return &SignalHandler{
-		signals: make(chan os.Signal, 1),
-	}
+	return &SignalHandler{}
 }
 
 // Start begins listening for OS signals and returns a context that will be
@@ -48,6 +48,7 @@ func (sh *SignalHandler) Start() (context.Context, error) {
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
 	sh.cancel = cancel
+	sh.signals = make(chan os.Signal, 1)
 	sh.running = true
 
 	// Register for termination signals

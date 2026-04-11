@@ -26,17 +26,17 @@ jobs:
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.1.6
           args: --help
 
       - name: Install gofumpt
-        run: go install mvdan.cc/gofumpt@latest
+        run: go install mvdan.cc/gofumpt@v0.7.0
 
       - name: Install prettier
-        run: npm install -g prettier
+        run: npm install -g prettier@3.5.3
 
       - name: Install semgrep
-        run: pip install semgrep
+        run: pip install semgrep==1.122.0
 
       - name: Run checks
         run: make -j check

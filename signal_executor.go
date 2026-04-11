@@ -1,15 +1,22 @@
+//go:build unix
+
 package cmdexec
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 )
 
 // WithSignalHandling wraps a BasicExecutor with signal handling capabilities.
 type WithSignalHandling struct {
 	executor      *BasicExecutor
 	signalHandler *SignalHandler
+
+	// nextID is an atomic counter for generating unique execution IDs.
+	nextID atomic.Uint64
 
 	// mu protects the processes map
 	mu sync.Mutex
@@ -49,7 +56,7 @@ func (e *WithSignalHandling) Stop() {
 // Execute runs a command with signal handling support.
 func (e *WithSignalHandling) Execute(ctx context.Context, cfg ToolConfig) (*ExecutionResult, error) {
 	// Create a unique ID for this execution
-	execID := buildCommandString(cfg.Command, cfg.Args)
+	execID := fmt.Sprintf("%s#%d", buildCommandString(cfg.Command, cfg.Args), e.nextID.Add(1))
 
 	// Create a cancellable context for this specific execution
 	execCtx, cancel := context.WithCancel(ctx)

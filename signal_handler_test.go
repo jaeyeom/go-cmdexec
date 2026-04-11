@@ -1,8 +1,9 @@
+//go:build unix
+
 package cmdexec
 
 import (
 	"os"
-	"runtime"
 	"testing"
 	"time"
 
@@ -14,9 +15,6 @@ func TestNewSignalHandler(t *testing.T) {
 	if handler == nil {
 		t.Fatal("NewSignalHandler() returned nil")
 		return
-	}
-	if handler.signals == nil {
-		t.Error("signals channel not initialized")
 	}
 	if handler.running {
 		t.Error("handler should not be running initially")
@@ -98,10 +96,6 @@ func TestSignalHandler_Stop(t *testing.T) {
 }
 
 func TestSignalHandler_SignalHandling(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping signal test on Windows")
-	}
-
 	handler := NewSignalHandler()
 
 	ctx, err := handler.Start()
@@ -126,6 +120,27 @@ func TestSignalHandler_SignalHandling(t *testing.T) {
 	}
 
 	// Clean up
+	handler.Stop()
+}
+
+func TestSignalHandler_Restart(t *testing.T) {
+	handler := NewSignalHandler()
+
+	// First cycle
+	_, err := handler.Start()
+	if err != nil {
+		t.Fatalf("First Start() failed: %v", err)
+	}
+	handler.Stop()
+
+	// Second cycle should work without panic
+	ctx, err := handler.Start()
+	if err != nil {
+		t.Fatalf("Second Start() failed: %v", err)
+	}
+	if ctx == nil {
+		t.Fatal("Second Start() returned nil context")
+	}
 	handler.Stop()
 }
 

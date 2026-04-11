@@ -1,4 +1,4 @@
-// Package executor provides command execution capabilities with mocking support.
+// Package cmdexec provides command execution capabilities with mocking support.
 package cmdexec
 
 import (
