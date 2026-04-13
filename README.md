@@ -173,7 +173,7 @@ result, err := executor.Execute(ctx, cmdexec.ToolConfig{
 
 ### Helper Functions
 
-Convenience functions that mirror the `os/exec` API:
+Convenience functions inspired by the `os/exec` API:
 
 | Function                    | Description                                        |
 | --------------------------- | -------------------------------------------------- |
@@ -185,6 +185,10 @@ Convenience functions that mirror the `os/exec` API:
 | `CombinedOutputWithWorkDir` | Like `CombinedOutput` with a working directory     |
 | `OutputWithStdin`           | Like `Output` with stdin input                     |
 | `CombinedOutputWithStdin`   | Like `CombinedOutput` with stdin input             |
+
+> **Note:** `CombinedOutput` variants capture stdout and stderr separately, then
+> concatenate stdout followed by stderr. Unlike `exec.Cmd.CombinedOutput()`,
+> they do not preserve the real-time interleaving of the two streams.
 
 ### Testing with MockExecutor
 
