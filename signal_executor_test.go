@@ -191,6 +191,54 @@ func TestWithSignalHandling_SignalCancellation(t *testing.T) {
 	}
 }
 
+func TestWithSignalHandling_IdenticalCommandsTrackedSeparately(t *testing.T) {
+	executor := NewWithSignalHandling()
+
+	ctx, err := executor.Start()
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer executor.Stop()
+
+	config := ToolConfig{
+		Command: "sleep",
+		Args:    []string{"10"},
+	}
+
+	// Start two identical commands concurrently.
+	const n = 2
+	done := make([]chan struct{}, n)
+	for i := range done {
+		done[i] = make(chan struct{})
+		go func(ch chan struct{}) {
+			defer close(ch)
+			_, _ = executor.Execute(ctx, config)
+		}(done[i])
+	}
+
+	// Give both commands time to start.
+	time.Sleep(200 * time.Millisecond)
+
+	if count := executor.GetRunningProcesses(); count != n {
+		t.Errorf("Expected %d running processes, got %d", n, count)
+	}
+
+	// Stop should cancel all of them.
+	executor.Stop()
+
+	for i, ch := range done {
+		select {
+		case <-ch:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("Command %d was not cancelled within timeout", i)
+		}
+	}
+
+	if count := executor.GetRunningProcesses(); count != 0 {
+		t.Errorf("Expected 0 running processes after Stop, got %d", count)
+	}
+}
+
 func TestWithSignalHandling_IsAvailable(t *testing.T) {
 	executor := NewWithSignalHandling()
 
