@@ -520,6 +520,111 @@ func TestBasicExecutor_Execute_TimeoutTiming(t *testing.T) {
 	}
 }
 
+func TestBasicExecutor_Execute_ParentDeadlineNotMisreportedAsTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping timeout test on Windows")
+	}
+
+	executor := NewBasicExecutor()
+
+	t.Run("parent deadline fires before executor timeout", func(t *testing.T) {
+		// Parent context expires in 200ms, executor timeout is 10s.
+		// The parent should fire first, and the error must NOT be TimeoutError.
+		parentCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+
+		cfg := ToolConfig{
+			Command: "sleep",
+			Args:    []string{"5"},
+			Timeout: 10 * time.Second,
+		}
+
+		result, err := executor.Execute(parentCtx, cfg)
+		if err == nil {
+			t.Fatal("Expected error when parent context deadline expires")
+		}
+		if result != nil {
+			t.Error("Expected nil result when parent context deadline expires")
+		}
+
+		// Must NOT be a TimeoutError — the executor's 10s timeout did not fire.
+		var timeoutErr *TimeoutError
+		if errors.As(err, &timeoutErr) {
+			t.Errorf("Got TimeoutError{Timeout: %v}, want plain context error; parent deadline fired, not executor timeout", timeoutErr.Timeout)
+		}
+
+		// Should surface as context.DeadlineExceeded from the parent.
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Expected context.DeadlineExceeded, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("executor timeout still returns TimeoutError", func(t *testing.T) {
+		// Parent has no deadline; executor timeout is 200ms.
+		ctx := context.Background()
+
+		cfg := ToolConfig{
+			Command: "sleep",
+			Args:    []string{"5"},
+			Timeout: 200 * time.Millisecond,
+		}
+
+		result, err := executor.Execute(ctx, cfg)
+		if err == nil {
+			t.Fatal("Expected TimeoutError when executor timeout fires")
+		}
+		if result != nil {
+			t.Error("Expected nil result for executor timeout")
+		}
+
+		var timeoutErr *TimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Fatalf("Expected TimeoutError, got %T: %v", err, err)
+		}
+		if timeoutErr.Timeout != 200*time.Millisecond {
+			t.Errorf("TimeoutError.Timeout = %v, want 200ms", timeoutErr.Timeout)
+		}
+	})
+
+	t.Run("parent cancel not misreported as timeout", func(t *testing.T) {
+		// Parent is cancelled (not deadline), executor has a timeout configured.
+		parentCtx, cancel := context.WithCancel(context.Background())
+
+		cfg := ToolConfig{
+			Command: "sleep",
+			Args:    []string{"5"},
+			Timeout: 10 * time.Second,
+		}
+
+		done := make(chan struct{})
+		var result *ExecutionResult
+		var err error
+		go func() {
+			result, err = executor.Execute(parentCtx, cfg)
+			close(done)
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Execute() did not respond to context cancellation")
+		}
+
+		if err == nil && (result == nil || result.ExitCode == 0) {
+			t.Fatal("Expected error for cancelled context")
+		}
+
+		// Must NOT be a TimeoutError.
+		var timeoutErr *TimeoutError
+		if errors.As(err, &timeoutErr) {
+			t.Errorf("Got TimeoutError, want context.Canceled; parent was cancelled, not timed out")
+		}
+	})
+}
+
 func TestBasicExecutor_Execute_RetrySuccessAfterFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Skipping retry test on Windows")

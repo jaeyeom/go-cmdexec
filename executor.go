@@ -146,11 +146,19 @@ func (e *BasicExecutor) executeOnce(ctx context.Context, cfg ToolConfig) (*Execu
 
 	cr := e.executeCommand(cmd, cfg)
 
-	if timedOut := e.handleTimeout(execCtx, cr.err, cfg); timedOut {
+	if timedOut := e.handleTimeout(ctx, execCtx, cr.err, cfg); timedOut {
 		return nil, &TimeoutError{
 			Command: buildCommandString(cfg.Command, cfg.Args),
 			Timeout: cfg.Timeout,
 		}
+	}
+
+	// If the command failed and the parent context is done, the
+	// cancellation came from the caller, not the executor's timeout.
+	// Surface the parent's context error directly so callers can
+	// distinguish upstream deadlines from executor timeouts.
+	if cr.err != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("parent context done: %w", ctx.Err())
 	}
 
 	exitCode, err := e.processExecutionError(cr.err, cfg.Command)
@@ -268,8 +276,8 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 	return n, err //nolint:wrapcheck
 }
 
-func (e *BasicExecutor) handleTimeout(ctx context.Context, err error, cfg ToolConfig) bool {
-	return err != nil && ctx.Err() == context.DeadlineExceeded && cfg.Timeout > 0
+func (e *BasicExecutor) handleTimeout(parentCtx, execCtx context.Context, err error, cfg ToolConfig) bool {
+	return err != nil && execCtx.Err() == context.DeadlineExceeded && cfg.Timeout > 0 && parentCtx.Err() == nil
 }
 
 func (e *BasicExecutor) processExecutionError(err error, command string) (int, error) {
