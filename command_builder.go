@@ -26,9 +26,13 @@ func (d *DirectCommandBuilder) Build(ctx context.Context, command string, args [
 	return exec.CommandContext(ctx, command, args...)
 }
 
-// ShellCommandBuilder executes commands through a shell (sh -c).
+// ShellCommandBuilder executes commands through a POSIX shell (sh -c).
 // This is useful for tools with client-server architectures (like Bazel, Gradle)
 // that work better when executed in a proper shell environment.
+//
+// ShellCommandBuilder is POSIX-only and will not work on Windows systems
+// that lack a POSIX-compatible sh. Use DirectCommandBuilder for
+// cross-platform command execution.
 type ShellCommandBuilder struct{}
 
 // Build creates a command that executes through a shell.

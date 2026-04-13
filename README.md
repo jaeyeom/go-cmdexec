@@ -93,7 +93,7 @@ result, err := executor.Execute(ctx, cmdexec.ToolConfig{
 Control how commands are invoked with `CommandBuilder`:
 
 - **`DirectCommandBuilder`** (default) — executes the command directly via `exec.Command`. Preferred for security and reliability.
-- **`ShellCommandBuilder`** — wraps the command in `sh -c` with proper quoting. Useful for tools that work better in a shell environment (e.g., Bazel, Gradle).
+- **`ShellCommandBuilder`** — wraps the command in `sh -c` with proper quoting. Useful for tools that work better in a shell environment (e.g., Bazel, Gradle). **POSIX-only**; not supported on Windows. Use `DirectCommandBuilder` for cross-platform execution.
 
 ```go
 result, err := executor.Execute(ctx, cmdexec.ToolConfig{
@@ -179,7 +179,7 @@ Convenience functions that mirror the `os/exec` API:
 | --------------------------- | -------------------------------------------------- |
 | `Output`                    | Run a command and return stdout                    |
 | `Run`                       | Run a command and return an error on non-zero exit |
-| `CombinedOutput`            | Run a command and return combined stdout+stderr    |
+| `CombinedOutput`            | Run a command and return stdout followed by stderr |
 | `OutputWithWorkDir`         | Like `Output` with a working directory             |
 | `RunWithWorkDir`            | Like `Run` with a working directory                |
 | `CombinedOutputWithWorkDir` | Like `CombinedOutput` with a working directory     |

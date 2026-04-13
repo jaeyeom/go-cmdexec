@@ -48,8 +48,10 @@ func Run(ctx context.Context, executor Executor, command string, args ...string)
 	return nil
 }
 
-// CombinedOutput runs a command and returns its combined stdout and stderr output,
-// similar to exec.Command().CombinedOutput().
+// CombinedOutput runs a command and returns stdout followed by stderr.
+// Unlike exec.Command().CombinedOutput(), which interleaves stdout and stderr
+// in real time, this function captures them separately and concatenates stdout
+// then stderr (separated by a newline if both are non-empty).
 // Returns an error if the command exits with a non-zero status.
 func CombinedOutput(ctx context.Context, executor Executor, command string, args ...string) ([]byte, error) {
 	result, err := executor.Execute(ctx, ToolConfig{
@@ -122,8 +124,9 @@ func RunWithWorkDir(ctx context.Context, executor Executor, workDir, command str
 	return nil
 }
 
-// CombinedOutputWithWorkDir runs a command in a specific working directory and returns combined output.
-// Similar to CombinedOutput but allows specifying a working directory.
+// CombinedOutputWithWorkDir runs a command in a specific working directory and
+// returns stdout followed by stderr. Similar to CombinedOutput but allows
+// specifying a working directory.
 func CombinedOutputWithWorkDir(ctx context.Context, executor Executor, workDir, command string, args ...string) ([]byte, error) {
 	result, err := executor.Execute(ctx, ToolConfig{
 		Command:    command,
@@ -178,7 +181,7 @@ func OutputWithStdin(ctx context.Context, executor Executor, stdin string, comma
 	return []byte(result.Output), nil
 }
 
-// CombinedOutputWithStdin runs a command with stdin input and returns combined stdout+stderr.
+// CombinedOutputWithStdin runs a command with stdin input and returns stdout followed by stderr.
 func CombinedOutputWithStdin(ctx context.Context, executor Executor, stdin string, command string, args ...string) ([]byte, error) {
 	cfg := ToolConfig{
 		Command: command,
